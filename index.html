@@ -87,6 +87,9 @@ const CATEGORY = {
 const STORE_KEY = "offline_food_counter_v1";
 let records = [];
 let scanning = false, stream = null, detector = null, lastCode = "", loopTimer = null;
+const SCAN_COOLDOWN_MS = 2000;       // minimum pause between counted plates
+const QR_CLEAR_MS = 900;             // ignore brief camera detection dropouts
+let nextScanAllowedAt = 0, lastQrSeenAt = 0;
 
 function todayLocal(){
  const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -131,12 +134,24 @@ async function scanLoop(){
  try{
   if($("video").readyState>=2){
    const codes=await detector.detect($("video"));
-   if(codes.length){
-    const code=String(codes[0].rawValue||"").trim().toUpperCase();
-    // Count only when a QR first appears; it must leave the camera view before it can count again.
-    if(code && code!==lastCode){addScan(code);lastCode=code;}
-    if(!codes.some(x=>String(x.rawValue||"").trim().toUpperCase()===lastCode)) {lastCode="";}
-   }else{lastCode="";}
+   const now=Date.now();
+   const code=codes.length ? String(codes[0].rawValue||"").trim().toUpperCase() : "";
+   if(code){
+    // Count a QR only once while it remains in view. Brief camera-detection dropouts
+    // do not re-arm the same card, and no second plate can count within 2 seconds.
+    lastQrSeenAt=now;
+    if(code!==lastCode && now>=nextScanAllowedAt){
+     addScan(code);
+     lastCode=code;
+     nextScanAllowedAt=now+SCAN_COOLDOWN_MS;
+    }else if(code!==lastCode && now<nextScanAllowedAt){
+     const remaining=Math.ceil((nextScanAllowedAt-now)/1000);
+     setStatus(`Please wait ${remaining} second${remaining===1?"":"s"} before the next scan.` ,"warn");
+    }
+   }else if(lastCode && now-lastQrSeenAt>=QR_CLEAR_MS){
+    // QR must be out of view for a short continuous interval before it can be scanned again.
+    lastCode="";
+   }
   }
  }catch(e){}
  loopTimer=setTimeout(scanLoop,180);
