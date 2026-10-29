@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#123b5d">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Offline Food Plate Counter</title>
+<style>
+:root{font-family:system-ui,-apple-system,Roboto,Arial,sans-serif;color:#17212b;background:#f3f6f8}
+body{margin:0} header{background:#123b5d;color:white;padding:18px 16px}
+h1{font-size:1.3rem;margin:0 0 4px} header p{margin:0;font-size:.9rem;opacity:.9}
+main{max-width:720px;margin:auto;padding:14px}
+.card{background:white;border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 2px 8px #0000000c}
+label{display:block;font-weight:650;margin:10px 0 5px}
+input,select,button{font:inherit}
+input,select{box-sizing:border-box;width:100%;padding:11px;border:1px solid #bbc7d0;border-radius:8px;background:white}
+button{border:0;border-radius:10px;padding:12px 14px;font-weight:700;cursor:pointer}
+.primary{background:#123b5d;color:white;width:100%;margin-top:12px}
+.secondary{background:#e5edf3;color:#123b5d}
+.danger{background:#fff0ef;color:#a22}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.total{font-size:2.2rem;font-weight:800;text-align:center;margin:4px 0}
+.muted{color:#52616d;font-size:.9rem}
+.status{padding:10px;border-radius:8px;background:#e9f6ed;color:#145c2e;font-weight:700;min-height:24px}
+.status.warn{background:#fff3d9;color:#7a4a00}
+.status.bad{background:#ffeded;color:#922}
+#video{width:100%;border-radius:10px;background:#111;max-height:42vh;object-fit:cover}
+.hidden{display:none!important}
+table{width:100%;border-collapse:collapse} th,td{padding:8px 4px;border-bottom:1px solid #e3e8ec;text-align:left} td:last-child,th:last-child{text-align:right}
+.smallbtn{padding:8px 10px;font-size:.9rem}
+footer{padding:8px 16px 24px;color:#52616d;font-size:.82rem;text-align:center}
+</style>
+</head>
+<body>
+<header><h1>Offline Food Plate Counter</h1><p>One successful scan = one plate. Works offline after setup.</p></header>
+<main>
+  <section class="card">
+    <div class="row">
+      <div><label for="mealDate">Date</label><input id="mealDate" type="date"></div>
+      <div><label for="counter">Counter / Phone</label><select id="counter"><option>Counter 1</option><option>Counter 2</option><option>Counter 3</option></select></div>
+    </div>
+    <label for="meal">Meal</label><select id="meal"><option>Breakfast</option><option selected>Lunch</option><option>Dinner</option><option>Tea/Snacks</option></select>
+    <p class="muted">Choose the correct meal before scanning. Records are saved on this phone only.</p>
+  </section>
+
+  <section class="card">
+    <div class="muted">PLATES COUNTED FOR THIS DATE + MEAL + COUNTER</div>
+    <div class="total" id="total">0</div>
+    <div id="status" class="status">Ready. Start the camera when the first plate is being served.</div>
+    <video id="video" class="hidden" playsinline muted></video>
+    <button id="start" class="primary">START QR SCANNER</button>
+    <button id="stop" class="secondary hidden" style="width:100%;margin-top:8px">PAUSE SCANNER</button>
+    <p class="muted">Scan the category QR on the card as the plate is handed over. Remove the card from view before scanning the next one.</p>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:1.05rem;margin-top:0">Counts by category</h2>
+    <table><thead><tr><th>Category</th><th>Plates</th></tr></thead><tbody id="categoryRows"></tbody></table>
+    <button id="export" class="primary">EXPORT ALL TRANSACTIONS (CSV)</button>
+    <button id="summaryExport" class="secondary" style="width:100%;margin-top:8px">EXPORT SUMMARY (CSV)</button>
+    <button id="history" class="secondary" style="width:100%;margin-top:8px">SHOW RECENT SCANS</button>
+    <div id="recent" class="muted hidden" style="margin-top:10px;max-height:220px;overflow:auto"></div>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:1.05rem;margin-top:0">Correction / safety</h2>
+    <p class="muted">If a scan was accidental, use Undo to remove the latest record for the currently selected meal and counter. Corrections are not silently hidden; the transaction file is the record to retain.</p>
+    <button id="undo" class="secondary" style="width:100%">UNDO LATEST SCAN FOR THIS MEAL/COUNTER</button>
+    <button id="backup" class="secondary" style="width:100%;margin-top:8px">BACK UP LOCAL DATA (JSON)</button>
+    <label for="restoreFile">Restore a JSON backup on this phone</label><input type="file" id="restoreFile" accept=".json,application/json">
+    <p class="muted">Do not clear Chrome site data or uninstall the app before exporting. Export after every meal.</p>
+  </section>
+</main>
+<footer>Offline-first. Data is stored locally in this browser on this phone. Export each phone separately.</footer>
+<script>
+const $ = id => document.getElementById(id);
+const CATEGORY = {
+  CAT01: "Delegates",
+  CAT02: "Invitees",
+  CAT03: "Students",
+  CAT04: "Organising Committee",
+  CAT05: "Volunteers",
+  CAT06: "Speakers",
+  CAT07: "Other / Staff"
+};
+const STORE_KEY = "offline_food_counter_v1";
+let records = [];
+let scanning = false, stream = null, detector = null, lastCode = "", loopTimer = null;
+
+function todayLocal(){
+ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+$("mealDate").value = todayLocal();
+function load(){try{records=JSON.parse(localStorage.getItem(STORE_KEY)||"[]"); if(!Array.isArray(records))records=[];}catch(e){records=[];}}
+function save(){try{localStorage.setItem(STORE_KEY,JSON.stringify(records));return true;}catch(e){setStatus("Storage is full or unavailable. Stop and export/back up now.","bad");return false;}}
+function config(){return {date:$("mealDate").value,meal:$("meal").value,counter:$("counter").value};}
+function filtered(){const c=config();return records.filter(r=>r.date===c.date&&r.meal===c.meal&&r.counter===c.counter);}
+function setStatus(msg,kind=""){const s=$("status");s.textContent=msg;s.className="status"+(kind?" "+kind:"");}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function render(){
+ const rs=filtered(); $("total").textContent=rs.length;
+ const counts={}; Object.values(CATEGORY).forEach(n=>counts[n]=0);
+ rs.forEach(r=>counts[r.category]=(counts[r.category]||0)+1);
+ $("categoryRows").innerHTML=Object.entries(counts).map(([n,v])=>`<tr><td>${esc(n)}</td><td>${v}</td></tr>`).join("");
+}
+function addScan(code){
+ if(!CATEGORY[code]){setStatus(`Unknown QR: ${code}. No plate counted. Check the printed QR codes.`,"bad");return;}
+ const c=config();
+ if(!c.date){setStatus("Select a date before scanning.","bad");return;}
+ const now=new Date();
+ const rec={id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+"-"+Math.random()),date:c.date,time:now.toLocaleTimeString("en-GB",{hour12:false}),timestamp:now.toISOString(),meal:c.meal,counter:c.counter,code,category:CATEGORY[code]};
+ records.push(rec);
+ if(!save()){records.pop();return;}
+ render();
+ setStatus(`${rec.category.toUpperCase()} — PLATE COUNTED. Current total: ${filtered().length}`,"");
+ if(navigator.vibrate) navigator.vibrate(70);
+}
+async function startScanner(){
+ if(!("BarcodeDetector" in window)){setStatus("This browser does not support built-in QR scanning. Update Chrome or use a supported QR scanner app; the web app needs BarcodeDetector support.","bad");return;}
+ try{
+  detector=new BarcodeDetector({formats:["qr_code"]});
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false});
+  $("video").srcObject=stream; await $("video").play();
+  $("video").classList.remove("hidden"); $("start").classList.add("hidden"); $("stop").classList.remove("hidden");
+  scanning=true; setStatus("Camera ready. Scan a category QR code.",""); scanLoop();
+ }catch(e){setStatus("Camera could not start. Allow camera permission and open the installed app from its secure HTTPS address.","bad");}
+}
+async function scanLoop(){
+ if(!scanning)return;
+ try{
+  if($("video").readyState>=2){
+   const codes=await detector.detect($("video"));
+   if(codes.length){
+    const code=String(codes[0].rawValue||"").trim().toUpperCase();
+    // Count only when a QR first appears; it must leave the camera view before it can count again.
+    if(code && code!==lastCode){addScan(code);lastCode=code;}
+    if(!codes.some(x=>String(x.rawValue||"").trim().toUpperCase()===lastCode)) {lastCode="";}
+   }else{lastCode="";}
+  }
+ }catch(e){}
+ loopTimer=setTimeout(scanLoop,180);
+}
+function stopScanner(){
+ scanning=false; if(loopTimer)clearTimeout(loopTimer);
+ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+ $("video").srcObject=null; $("video").classList.add("hidden"); $("start").classList.remove("hidden"); $("stop").classList.add("hidden");
+ setStatus("Scanner paused. Records remain saved on this phone.");
+}
+function download(name,content,type="text/csv;charset=utf-8"){
+ const blob=new Blob(["\ufeff"+content],{type});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+}
+function csvCell(v){return '"'+String(v??"").replace(/"/g,'""')+'"';}
+function toCSV(rows,keys){return [keys.map(csvCell).join(","),...rows.map(r=>keys.map(k=>csvCell(r[k])).join(","))].join("\r\n");}
+function exportAll(){
+ if(!records.length){setStatus("No scans to export yet.","warn");return;}
+ const rows=[...records].sort((a,b)=>a.timestamp.localeCompare(b.timestamp));
+ download(`food_transactions_${$("counter").value.replaceAll(" ","")}_${todayLocal()}.csv`,toCSV(rows,["id","date","time","meal","counter","code","category","timestamp"]));
+ setStatus(`Exported ${rows.length} transactions. Keep this file safe.`);
+}
+function exportSummary(){
+ const map={};records.forEach(r=>{const k=[r.date,r.meal,r.counter,r.category].join("|");if(!map[k])map[k]={date:r.date,meal:r.meal,counter:r.counter,category:r.category,plates:0};map[k].plates++;});
+ const rows=Object.values(map).sort((a,b)=>(a.date+a.meal+a.counter+a.category).localeCompare(b.date+b.meal+b.counter+b.category));
+ if(!rows.length){setStatus("No scans to export yet.","warn");return;}
+ download(`food_summary_${todayLocal()}.csv`,toCSV(rows,["date","meal","counter","category","plates"]));
+}
+function undo(){
+ const c=config();let i=-1;
+ for(let n=records.length-1;n>=0;n--){const r=records[n];if(r.date===c.date&&r.meal===c.meal&&r.counter===c.counter){i=n;break;}}
+ if(i<0){setStatus("No scan available to undo for the selected meal/counter.","warn");return;}
+ const r=records[i];if(confirm(`Remove latest scan: ${r.category} at ${r.time}?`)){records.splice(i,1);save();render();setStatus(`Removed latest ${r.category} scan. Exported files made earlier will not change.`,"warn");}
+}
+function backup(){download(`food_counter_backup_${todayLocal()}.json`,JSON.stringify({version:1,exportedAt:new Date().toISOString(),records},null,2),"application/json");}
+$("start").addEventListener("click",startScanner);$("stop").addEventListener("click",stopScanner);
+$("export").addEventListener("click",exportAll);$("summaryExport").addEventListener("click",exportSummary);$("undo").addEventListener("click",undo);$("backup").addEventListener("click",backup);
+$("history").addEventListener("click",()=>{const box=$("recent");box.classList.toggle("hidden");const rs=filtered().slice(-30).reverse();box.innerHTML=rs.length?rs.map(r=>`${esc(r.time)} — ${esc(r.category)} (${esc(r.code)})`).join("<br>"):"No scans for this selection.";});
+["mealDate","meal","counter"].forEach(id=>$(id).addEventListener("change",()=>{render();setStatus("Selection changed. Confirm the meal and counter before scanning.","warn");}));
+$("restoreFile").addEventListener("change",async e=>{const f=e.target.files[0];if(!f)return;try{const data=JSON.parse(await f.text());if(!Array.isArray(data.records))throw new Error("Invalid backup");if(!confirm(`Merge ${data.records.length} records into this phone? Existing records will be kept; duplicate transaction IDs will be skipped.`))return;const ids=new Set(records.map(r=>r.id));let added=0;data.records.forEach(r=>{if(r&&r.id&&!ids.has(r.id)){records.push(r);ids.add(r.id);added++;}});save();render();setStatus(`Restored ${added} new records. Export and review the combined file.`); }catch(err){setStatus("Could not restore: invalid JSON backup.","bad");}finally{e.target.value="";}});
+if("serviceWorker" in navigator && location.protocol.startsWith("http")){window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));}
+load();render();
+</script>
+</body></html>

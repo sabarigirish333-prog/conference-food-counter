@@ -1,0 +1,9 @@
+{
+  "name": "Offline Food Plate Counter",
+  "short_name": "Plate Counter",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f3f6f8",
+  "theme_color": "#123b5d",
+  "description": "Offline QR plate counting for conference food service."
+}
